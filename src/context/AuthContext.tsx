@@ -26,7 +26,7 @@ interface AuthContextType {
 
   // Actions
   login: (email: string, password: string) => Promise<{ user: User; access: string; refresh: string }>;
-  register: (userData: RegisterData) => Promise<{ user: User; access: string; refresh: string }>;
+  register: (userData: RegisterData) => Promise<{ message: string; email: string }>;
   logout: () => Promise<void>;
   updateUser: (userData: Partial<User>) => Promise<void>;
   checkAuth: () => Promise<void>;

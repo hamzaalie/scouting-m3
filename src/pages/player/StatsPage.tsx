@@ -7,8 +7,6 @@ import EmptyState from '../../components/common/EmptyState';
 import { getMyProfile, getMyStats, getMyMatches } from '../../services/playerService';
 import { getSeasonStats } from '../../services/statsService';
 import type { AggregatedStats, SeasonStats, PlayerStats } from '../../services/statsService';
-import { handleApiError } from '../../utils/errorHandler';
-import { showError } from '../../utils/toast';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 /**
@@ -86,7 +84,7 @@ const StatsPage: React.FC = () => {
 			} catch (err: any) {
 				// Silently handle stats errors - expected for new users without player profiles
 				console.log('[StatsPage] Stats fetch error (expected for new users):', err);
-				setStats(null);
+				setAllTimeStats(null);
 				setMatches([]);
 				setSeasonStats(null);
 			} finally {
