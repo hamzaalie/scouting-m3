@@ -1,0 +1,416 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import DashboardLayout from '../../components/layout/DashboardLayout';
+import PageHeader from '../../components/layout/PageHeader';
+import Card from '../../components/common/Card';
+import Button from '../../components/common/Button';
+import Table, { type TableColumn } from '../../components/common/Table';
+import SearchBar from '../../components/common/SearchBar';
+import Select, { type SelectOption } from '../../components/common/Select';
+import Avatar from '../../components/common/Avatar';
+import Badge from '../../components/common/Badge';
+import ConfirmDialog from '../../components/common/ConfirmDialog';
+import TeamModal from '../../components/admin/TeamModal';
+import { getAllTeams, deleteTeam, getTeamById } from '../../services/teamService';
+import type { PaginatedResponse, TeamListItem, TeamQueryParams, Team } from '../../types/team';
+import { showSuccess, showError } from '../../utils/toast';
+
+/**
+ * Teams management page with full CRUD operations, search, filter, sort, and pagination.
+ * 
+ * Features:
+ * - Create, edit, and delete teams
+ * - Search and filter by location
+ * - Sort by name, location, founded year
+ * - Pagination
+ * - Toast notifications
+ * - Comprehensive error handling
+ * - Responsive design
+ * - Loading states
+ */
+const TeamsPage: React.FC = () => {
+	// Data state
+	const [teams, setTeams] = useState<TeamListItem[]>([]);
+	const [count, setCount] = useState<number>(0);
+
+	// UI state
+	const [loading, setLoading] = useState<boolean>(false);
+	const [error, setError] = useState<string>('');
+
+	// Controls
+	const [page, setPage] = useState<number>(1);
+	const [searchQuery, setSearchQuery] = useState<string>('');
+	const [debouncedQuery, setDebouncedQuery] = useState<string>('');
+	const [locationFilter, setLocationFilter] = useState<string>('');
+	const [sortField, setSortField] = useState<string>('name');
+	const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+	// Modal state
+	const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+	const [showEditModal, setShowEditModal] = useState<boolean>(false);
+	const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
+
+	// Delete dialog state
+	const [deleteDialogOpen, setDeleteDialogOpen] = useState<boolean>(false);
+	const [teamToDelete, setTeamToDelete] = useState<TeamListItem | null>(null);
+	const [deleting, setDeleting] = useState<boolean>(false);
+
+	// Refs for cleanup
+	const abortControllerRef = useRef<AbortController | null>(null);
+
+	// Derived
+	const pageSize = 10; // aligned with backend PAGE_SIZE
+	const totalPages = useMemo(() => Math.max(1, Math.ceil(count / pageSize)), [count]);
+	const ordering = useMemo(() => (sortOrder === 'asc' ? sortField : `-${sortField}`), [sortField, sortOrder]);
+
+	// Debounce search input (300ms delay)
+	useEffect(() => {
+		const t = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+		return () => clearTimeout(t);
+	}, [searchQuery]);
+
+	// Fetch teams whenever controls change
+	const fetchTeams = useCallback(async () => {
+		// Cancel previous request if still pending
+		if (abortControllerRef.current) {
+			abortControllerRef.current.abort();
+		}
+
+		const controller = new AbortController();
+		abortControllerRef.current = controller;
+
+		setLoading(true);
+		setError('');
+
+		try {
+			const params: TeamQueryParams = {
+				search: debouncedQuery || undefined,
+				location: locationFilter || undefined,
+				ordering,
+				page,
+			};
+
+			const res: PaginatedResponse<TeamListItem> = await getAllTeams(params);
+			
+			// Check if request was aborted
+			if (controller.signal.aborted) return;
+
+			// Debug: Log team data to check for logo URLs
+			console.log('[TeamsPage] Teams fetched:', res.results.map(t => ({ id: t.id, name: t.name, logo: t.logo })));
+
+			setTeams(res.results);
+			setCount(res.count);
+		} catch (err: any) {
+			// Don't set error if request was aborted
+			if (controller.signal.aborted) return;
+
+			const errorMessage = err?.message || 'Failed to load teams.';
+			setError(errorMessage);
+			setTeams([]);
+			setCount(0);
+			console.error('Failed to fetch teams:', err);
+		} finally {
+			if (!controller.signal.aborted) {
+				setLoading(false);
+			}
+		}
+	}, [debouncedQuery, locationFilter, ordering, page]);
+
+	useEffect(() => {
+		fetchTeams();
+		
+		// Cleanup: abort request on unmount
+		return () => {
+			if (abortControllerRef.current) {
+				abortControllerRef.current.abort();
+			}
+		};
+	}, [fetchTeams]);
+
+	// Unique locations from current page
+	const locationOptions = useMemo(() => {
+		const set = new Set<string>();
+		teams.forEach(t => t.location && set.add(t.location));
+		return Array.from(set).sort();
+	}, [teams]);
+
+	// Handlers
+	const handleSearch = (q: string) => {
+		setSearchQuery(q);
+		setPage(1);
+	};
+
+	const handleLocation = (loc: string) => {
+		setLocationFilter(loc);
+		setPage(1);
+	};
+
+	// Note: Table component handles client-side sorting internally
+	// Backend sorting is still active via 'ordering' parameter in API calls
+
+	const handlePageChange = (p: number) => {
+		if (p >= 1 && p <= totalPages) setPage(p);
+	};
+
+	// Open create modal
+	const openCreateModal = () => {
+		setSelectedTeam(null);
+		setShowCreateModal(true);
+	};
+
+	// Handle edit - fetch full team data
+	const handleEdit = async (team: TeamListItem) => {
+		try {
+			setLoading(true);
+			const fullTeam = await getTeamById(team.id);
+			setSelectedTeam(fullTeam);
+			setShowEditModal(true);
+		} catch (err: any) {
+			showError(err?.message || 'Failed to load team details.');
+			console.error('Failed to load team:', err);
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	// Handle delete button click
+	const handleDelete = (team: TeamListItem) => {
+		setTeamToDelete(team);
+		setDeleteDialogOpen(true);
+	};
+
+	// Confirm delete
+	const confirmDelete = async () => {
+		if (!teamToDelete) return;
+
+		setDeleting(true);
+		try {
+			await deleteTeam(teamToDelete.id);
+			showSuccess('Team deleted successfully!');
+			
+			// Refresh teams list
+			await fetchTeams();
+			
+			// Close dialog
+			setDeleteDialogOpen(false);
+			setTeamToDelete(null);
+		} catch (err: any) {
+			const errorMessage = err?.message || 'Failed to delete team.';
+			
+			// Handle 409 Conflict specifically
+			if (err?.response?.status === 409 || errorMessage.includes('409') || errorMessage.includes('existing players')) {
+				showError('Cannot delete team with existing players. Remove players first.');
+			} else {
+				showError(errorMessage);
+			}
+			
+			console.error('Failed to delete team:', err);
+		} finally {
+			setDeleting(false);
+		}
+	};
+
+	// Handle modal success
+	const handleModalSuccess = async () => {
+		// Refresh teams list
+		await fetchTeams();
+	};
+
+	// Close modals
+	const handleCloseCreateModal = () => {
+		setShowCreateModal(false);
+		setSelectedTeam(null);
+	};
+
+	const handleCloseEditModal = () => {
+		setShowEditModal(false);
+		setSelectedTeam(null);
+	};
+
+	const handleCloseDeleteDialog = () => {
+		if (!deleting) {
+			setDeleteDialogOpen(false);
+			setTeamToDelete(null);
+		}
+	};
+
+	const handleRowClick = (_team: TeamListItem) => {
+		// route to team details in future milestone
+		// TODO: Navigate to team details page
+	};
+
+	// Table columns definition (using reusable components)
+	// Note: sortable is disabled on columns because we use backend sorting via API
+	const columns: TableColumn<TeamListItem>[] = useMemo(() => [
+		{
+			key: 'logo',
+			label: 'Logo',
+			render: (team) => (
+				<Avatar 
+					src={team.logo ? String(team.logo) : undefined} 
+					alt={team.name} 
+					size="sm"
+					fallback={team.name.substring(0, 2).toUpperCase()}
+					key={`avatar-${team.id}-${team.logo || 'no-logo'}`}
+				/>
+			),
+			align: 'center' as const,
+			width: '80px',
+		},
+		{
+			key: 'name',
+			label: 'Team Name',
+			sortable: true,
+		},
+		{
+			key: 'location',
+			label: 'Location',
+			sortable: true,
+		},
+		{
+			key: 'founded_year',
+			label: 'Founded',
+			render: (team) => team.founded_year || '-',
+			sortable: true,
+		},
+		{
+			key: 'players_count',
+			label: 'Players',
+			render: (team) => <Badge variant="info">{team.players_count}</Badge>,
+			align: 'center' as const,
+		},
+		{
+			key: 'actions',
+			label: 'Actions',
+			render: (team) => (
+				<div className="flex gap-2 justify-end">
+					<Button 
+						size="sm" 
+						variant="secondary" 
+						onClick={(e) => { 
+							e.stopPropagation(); 
+							handleEdit(team); 
+						}}
+						aria-label={`Edit ${team.name}`}
+					>
+						Edit
+					</Button>
+					<Button 
+						size="sm" 
+						variant="danger" 
+						onClick={(e) => { 
+							e.stopPropagation(); 
+							handleDelete(team); 
+						}}
+						aria-label={`Delete ${team.name}`}
+					>
+						Delete
+					</Button>
+				</div>
+			),
+			align: 'right' as const,
+		},
+	], []);
+
+	// Location options for Select component
+	const locationSelectOptions: SelectOption[] = useMemo(() => [
+		{ value: '', label: 'All Locations' },
+		...locationOptions.map(loc => ({ value: loc, label: loc })),
+	], [locationOptions]);
+
+	return (
+		<DashboardLayout>
+			<PageHeader
+				title="Teams"
+				subtitle="Manage all teams and rosters"
+				action={{ label: 'Add Team', onClick: openCreateModal }}
+			/>
+
+			<Card className="mt-6">
+				{/* Search & Filters */}
+				<div className="flex flex-col gap-4 mb-6 md:flex-row md:items-center">
+					<div className="flex-1 md:max-w-sm">
+						<SearchBar
+							placeholder="Search teams..."
+							onSearch={handleSearch}
+							value={searchQuery}
+							onChange={setSearchQuery}
+							loading={loading}
+						/>
+					</div>
+					<div className="w-full md:max-w-xs">
+						<Select
+							placeholder="Filter by location"
+							options={locationSelectOptions}
+							value={locationFilter}
+							onChange={(value) => handleLocation(value as string)}
+						/>
+					</div>
+				</div>
+
+				{/* Teams Table */}
+				<Table
+					columns={columns}
+					data={teams}
+					loading={loading}
+					onRowClick={handleRowClick}
+					emptyState={{
+						title: 'No teams yet',
+						message: 'Create your first team to get started!',
+						action: {
+							label: 'Add Team',
+							onClick: openCreateModal,
+						},
+					}}
+					pagination={
+						totalPages > 0
+							? {
+									currentPage: page,
+									totalPages: totalPages,
+									onPageChange: handlePageChange,
+								}
+							: undefined
+					}
+				/>
+
+				{/* Results count */}
+				{!loading && !error && teams.length > 0 && (
+					<div className="mt-4 text-sm text-gray-500 text-center">
+						Showing {teams.length} of {count} teams
+					</div>
+				)}
+			</Card>
+
+			{/* Create Team Modal */}
+			<TeamModal
+				isOpen={showCreateModal}
+				onClose={handleCloseCreateModal}
+				team={null}
+				onSuccess={handleModalSuccess}
+			/>
+
+			{/* Edit Team Modal */}
+			<TeamModal
+				isOpen={showEditModal}
+				onClose={handleCloseEditModal}
+				team={selectedTeam}
+				onSuccess={handleModalSuccess}
+			/>
+
+			{/* Delete Confirmation Dialog */}
+			<ConfirmDialog
+				isOpen={deleteDialogOpen}
+				title="Delete Team"
+				message={`Are you sure you want to delete "${teamToDelete?.name}"? This action cannot be undone.`}
+				onConfirm={confirmDelete}
+				onCancel={handleCloseDeleteDialog}
+				danger
+				confirmLabel="Delete"
+				cancelLabel="Cancel"
+				loading={deleting}
+			/>
+
+		</DashboardLayout>
+	);
+};
+
+export default TeamsPage;

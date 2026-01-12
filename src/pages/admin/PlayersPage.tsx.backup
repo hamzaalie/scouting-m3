@@ -1,0 +1,602 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import DashboardLayout from '../../components/layout/DashboardLayout';
+import Avatar from '../../components/common/Avatar';
+import ConfirmDialog from '../../components/common/ConfirmDialog';
+import PlayerModal from '../../components/admin/PlayerModal';
+import { getAllPlayers, deletePlayer, getPlayerById } from '../../services/playerService';
+import { getAllTeams } from '../../services/teamService';
+import type { 
+	PaginatedResponse, 
+	PlayerListItem, 
+	PlayerQueryParams, 
+	Player,
+	Position 
+} from '../../types/player';
+import type { TeamListItem } from '../../types/team';
+import { showSuccess, showError } from '../../utils/toast';
+import { POSITION_OPTIONS } from '../../types/player';
+
+/**
+ * Enhanced Players Management Page
+ * 
+ * Modern, professional design inspired by Stripe Dashboard and GitHub tables.
+ * 
+ * Features:
+ * - Enhanced header with title and subtitle
+ * - Advanced search and filtering
+ * - Professional table with color-coded position badges
+ * - Jersey numbers with circle backgrounds
+ * - View, Edit, and Delete actions
+ * - Responsive design with mobile support
+ * - Empty states and loading skeletons
+ * - Sticky table header
+ * - Toast notifications
+ */
+const PlayersPage: React.FC = () => {
+	// Data state
+	const [players, setPlayers] = useState<PlayerListItem[]>([]);
+	const [teams, setTeams] = useState<TeamListItem[]>([]);
+	const [count, setCount] = useState<number>(0);
+
+	// UI state
+	const [loading, setLoading] = useState<boolean>(false);
+	const [error, setError] = useState<string>('');
+
+	// Search and basic filters
+	const [page, setPage] = useState<number>(1);
+	const [searchQuery, setSearchQuery] = useState<string>('');
+	const [debouncedQuery, setDebouncedQuery] = useState<string>('');
+	const [teamFilter, setTeamFilter] = useState<string>('');
+	const [positionFilter, setPositionFilter] = useState<string>('');
+
+	// Advanced filters
+	const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
+	const [nationalityFilter, setNationalityFilter] = useState<string>('');
+	const [ageMin, setAgeMin] = useState<number | null>(null);
+	const [ageMax, setAgeMax] = useState<number | null>(null);
+
+	// Sort
+	const [sortField, setSortField] = useState<string>('full_name');
+	const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+	// Modal state (placeholders for future implementation)
+	const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+	const [showEditModal, setShowEditModal] = useState<boolean>(false);
+	const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
+
+	// Delete dialog state
+	const [deleteDialogOpen, setDeleteDialogOpen] = useState<boolean>(false);
+	const [playerToDelete, setPlayerToDelete] = useState<PlayerListItem | null>(null);
+	const [deleting, setDeleting] = useState<boolean>(false);
+
+	// Refs for cleanup
+	const abortControllerRef = useRef<AbortController | null>(null);
+
+	// Derived
+	const pageSize = 10;
+	const totalPages = useMemo(() => Math.max(1, Math.ceil(count / pageSize)), [count]);
+	const ordering = useMemo(() => (sortOrder === 'asc' ? sortField : `-${sortField}`), [sortField, sortOrder]);
+
+	// Debounce search input (300ms delay)
+	useEffect(() => {
+		const t = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+		return () => clearTimeout(t);
+	}, [searchQuery]);
+
+	// Count active filters (for badge)
+	const activeFilterCount = useMemo(() => {
+		let count = 0;
+		if (debouncedQuery) count++;
+		if (teamFilter) count++;
+		if (positionFilter) count++;
+		if (nationalityFilter) count++;
+		if (ageMin !== null) count++;
+		if (ageMax !== null) count++;
+		return count;
+	}, [debouncedQuery, teamFilter, positionFilter, nationalityFilter, ageMin, ageMax]);
+
+	// Fetch teams for filter dropdown
+	useEffect(() => {
+		const fetchTeams = async () => {
+			try {
+				const res = await getAllTeams({ page: 1, ordering: 'name' });
+				setTeams(res.results);
+			} catch (err: any) {
+				console.error('Failed to fetch teams:', err);
+				// Don't show error toast for team filter loading failure
+			}
+		};
+		fetchTeams();
+	}, []);
+
+	// Fetch players whenever controls change
+	const fetchPlayers = useCallback(async () => {
+		// Cancel previous request if still pending
+		if (abortControllerRef.current) {
+			abortControllerRef.current.abort();
+		}
+
+		const controller = new AbortController();
+		abortControllerRef.current = controller;
+
+		setLoading(true);
+		setError('');
+
+		try {
+			const params: PlayerQueryParams = {
+				search: debouncedQuery || undefined,
+				team: teamFilter ? Number(teamFilter) : undefined,
+				position: positionFilter ? (positionFilter as Position) : undefined,
+				nationality: nationalityFilter || undefined,
+				age_min: ageMin !== null ? ageMin : undefined,
+				age_max: ageMax !== null ? ageMax : undefined,
+				ordering,
+				page,
+			};
+
+			const res: PaginatedResponse<PlayerListItem> = await getAllPlayers(params);
+			
+			// Check if request was aborted
+			if (controller.signal.aborted) return;
+
+			console.log('[PlayersPage] Players fetched:', res.results.length, 'players');
+
+			setPlayers(res.results);
+			setCount(res.count);
+		} catch (err: any) {
+			// Don't set error if request was aborted
+			if (controller.signal.aborted) return;
+
+			const errorMessage = err?.message || 'Failed to load players.';
+			setError(errorMessage);
+			setPlayers([]);
+			setCount(0);
+			console.error('Failed to fetch players:', err);
+		} finally {
+			if (!controller.signal.aborted) {
+				setLoading(false);
+			}
+		}
+	}, [debouncedQuery, teamFilter, positionFilter, nationalityFilter, ageMin, ageMax, ordering, page]);
+
+	// Fetch players on mount and when filters change
+	useEffect(() => {
+		fetchPlayers();
+		
+		// Cleanup: abort request on unmount
+		return () => {
+			if (abortControllerRef.current) {
+				abortControllerRef.current.abort();
+			}
+		};
+	}, [fetchPlayers]);
+
+	// Action handlers
+	const handleSearch = (query: string) => {
+		setSearchQuery(query);
+		setPage(1); // Reset to first page
+	};
+
+	const handleTeamFilter = (value: string) => {
+		setTeamFilter(value);
+		setPage(1);
+	};
+
+	const handlePositionFilter = (value: string) => {
+		setPositionFilter(value);
+		setPage(1);
+	};
+
+	const handleNationalityFilter = (value: string) => {
+		setNationalityFilter(value);
+		setPage(1);
+	};
+
+	const handleAdvancedFilterChange = (field: 'nationality' | 'ageMin' | 'ageMax', value: string | number | null) => {
+		if (field === 'nationality') {
+			setNationalityFilter(value as string);
+		} else if (field === 'ageMin') {
+			setAgeMin(value as number | null);
+		} else if (field === 'ageMax') {
+			setAgeMax(value as number | null);
+		}
+		setPage(1);
+	};
+
+	const clearAdvancedFilters = () => {
+		setNationalityFilter('');
+		setAgeMin(null);
+		setAgeMax(null);
+		setPage(1);
+	};
+
+	const toggleAdvancedFilters = () => {
+		setShowAdvancedFilters(!showAdvancedFilters);
+	};
+
+	const clearAllFilters = () => {
+		setSearchQuery('');
+		setDebouncedQuery('');
+		setTeamFilter('');
+		setPositionFilter('');
+		setNationalityFilter('');
+		setAgeMin(null);
+		setAgeMax(null);
+		setPage(1);
+		setShowAdvancedFilters(false);
+	};
+
+	const handlePageChange = (newPage: number) => {
+		setPage(newPage);
+		// Scroll to top of table
+		window.scrollTo({ top: 0, behavior: 'smooth' });
+	};
+
+	const handleRowClick = (player: PlayerListItem) => {
+		console.log('Row clicked:', player);
+		// TODO: Open player detail view/modal
+	};
+
+	const openCreateModal = () => {
+		setShowCreateModal(true);
+	};
+
+	const handleEdit = async (player: PlayerListItem) => {
+		try {
+			setLoading(true);
+			// Fetch full player details
+			const fullPlayer = await getPlayerById(player.id);
+			setSelectedPlayer(fullPlayer);
+			setShowEditModal(true);
+		} catch (err: any) {
+			showError(err?.message || 'Failed to load player details.');
+			console.error('Failed to load player:', err);
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	const handleDelete = (player: PlayerListItem) => {
+		setPlayerToDelete(player);
+		setDeleteDialogOpen(true);
+	};
+
+	const confirmDelete = async () => {
+		if (!playerToDelete) return;
+
+		setDeleting(true);
+
+		try {
+			await deletePlayer(playerToDelete.id);
+			showSuccess(`Player "${playerToDelete.full_name}" deleted successfully.`);
+			
+			// Refresh player list
+			await fetchPlayers();
+			
+			// Close dialog
+			setDeleteDialogOpen(false);
+			setPlayerToDelete(null);
+		} catch (err: any) {
+			const errorMessage = err?.message || 'Failed to delete player.';
+			showError(errorMessage);
+			console.error('Failed to delete player:', err);
+		} finally {
+			setDeleting(false);
+		}
+	};
+
+	const handleCloseDeleteDialog = () => {
+		setDeleteDialogOpen(false);
+		setPlayerToDelete(null);
+	};
+
+	// Helper: Get position badge color
+	const getPositionColor = (position: Position): 'warning' | 'info' | 'success' | 'danger' => {
+		switch (position) {
+			case 'GK':
+				return 'warning'; // Yellow/Amber
+			case 'DF':
+				return 'info'; // Blue
+			case 'MF':
+				return 'success'; // Green
+			case 'FW':
+				return 'danger'; // Red
+			default:
+				return 'info';
+		}
+	};
+
+	// Table columns definition
+	const columns: TableColumn<PlayerListItem>[] = useMemo(() => [
+		{
+			key: 'photo',
+			label: '',
+			render: (player) => (
+				<Avatar 
+					src={undefined} // TODO: Add player photo when available
+					alt={player.full_name} 
+					size="sm"
+					fallback={player.full_name.substring(0, 2).toUpperCase()}
+				/>
+			),
+			align: 'center' as const,
+			width: '60px',
+		},
+		{
+			key: 'full_name',
+			label: 'Name',
+			sortable: true,
+			render: (player) => (
+				<span className="font-semibold text-gray-900">{player.full_name}</span>
+			),
+		},
+		{
+			key: 'team_name',
+			label: 'Team',
+			sortable: true,
+			render: (player) => (
+				<span className="text-gray-700">{player.team_name || '-'}</span>
+			),
+		},
+		{
+			key: 'position',
+			label: 'Position',
+			sortable: true,
+			render: (player) => (
+				<Badge variant={getPositionColor(player.position)}>
+					{player.position}
+				</Badge>
+			),
+			align: 'center' as const,
+		},
+		{
+			key: 'jersey_number',
+			label: '#',
+			sortable: true,
+			render: (player) => (
+				<span className="text-gray-500 font-medium">{player.jersey_number || '-'}</span>
+			),
+			align: 'center' as const,
+			width: '80px',
+		},
+		{
+			key: 'age',
+			label: 'Age',
+			sortable: true,
+			render: (player) => (
+				<span className="text-gray-700">{player.age || '-'}</span>
+			),
+			align: 'center' as const,
+			width: '80px',
+		},
+		{
+			key: 'nationality',
+			label: 'Nationality',
+			sortable: true,
+			render: (player) => (
+				<span className="text-gray-700">{player.nationality}</span>
+			),
+		},
+		{
+			key: 'actions',
+			label: 'Actions',
+			render: (player) => (
+				<div className="flex gap-2 justify-end">
+					<Button 
+						size="sm" 
+						variant="ghost" 
+						onClick={(e) => { 
+							e.stopPropagation(); 
+							console.log('View player:', player.id); 
+							// TODO: Open detail view
+						}}
+						aria-label={`View ${player.full_name}`}
+					>
+						View
+					</Button>
+					<Button 
+						size="sm" 
+						variant="secondary" 
+						onClick={(e) => { 
+							e.stopPropagation(); 
+							handleEdit(player); 
+						}}
+						aria-label={`Edit ${player.full_name}`}
+					>
+						Edit
+					</Button>
+					<Button 
+						size="sm" 
+						variant="danger" 
+						onClick={(e) => { 
+							e.stopPropagation(); 
+							handleDelete(player); 
+						}}
+						aria-label={`Delete ${player.full_name}`}
+					>
+						Delete
+					</Button>
+				</div>
+			),
+			align: 'right' as const,
+			width: '200px',
+		},
+	], []);
+
+	// Team filter options
+	const teamSelectOptions: SelectOption[] = useMemo(() => [
+		{ value: '', label: 'All Teams' },
+		...teams.map(team => ({ value: String(team.id), label: team.name })),
+	], [teams]);
+
+	// Position filter options
+	const positionSelectOptions: SelectOption[] = useMemo(() => [
+		{ value: '', label: 'All Positions' },
+		...POSITION_OPTIONS.map(opt => ({ value: opt.value, label: opt.label })),
+	], []);
+
+	return (
+		<DashboardLayout>
+			<PageHeader
+				title="Players"
+				subtitle="Manage all player profiles and information"
+				action={{ label: 'Add Player', onClick: openCreateModal }}
+			/>
+
+			<Card className="mt-6">
+				{/* Search & Basic Filters */}
+				<div className="flex flex-col gap-4 mb-6 lg:flex-row lg:items-center lg:justify-between">
+					<div className="flex flex-col gap-4 flex-1 md:flex-row md:items-center">
+						{/* Search */}
+						<div className="flex-1 md:max-w-sm">
+							<SearchBar
+								placeholder="Search players by name..."
+								onSearch={handleSearch}
+								value={searchQuery}
+								onChange={setSearchQuery}
+								loading={loading}
+							/>
+						</div>
+
+						{/* Team Filter */}
+						<div className="w-full md:w-48">
+							<Select
+								placeholder="All Teams"
+								options={teamSelectOptions}
+								value={teamFilter}
+								onChange={(value) => handleTeamFilter(value as string)}
+							/>
+						</div>
+
+						{/* Position Filter */}
+						<div className="w-full md:w-48">
+							<Select
+								placeholder="All Positions"
+								options={positionSelectOptions}
+								value={positionFilter}
+								onChange={(value) => handlePositionFilter(value as string)}
+							/>
+						</div>
+					</div>
+
+					{/* Advanced Filters Toggle */}
+					<div className="flex gap-2">
+						<Button
+							variant={showAdvancedFilters ? 'primary' : 'outline'}
+							onClick={toggleAdvancedFilters}
+							className="relative"
+						>
+							<svg
+								className="w-4 h-4 mr-2"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									strokeWidth={2}
+									d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+								/>
+							</svg>
+							Advanced Filters
+							{activeFilterCount > 0 && (
+								<span className="ml-2 inline-flex items-center justify-center w-5 h-5 text-xs font-bold text-white bg-red-500 rounded-full">
+									{activeFilterCount}
+								</span>
+							)}
+						</Button>
+
+						{activeFilterCount > 0 && (
+							<Button
+								variant="ghost"
+								onClick={clearAllFilters}
+							>
+								Clear All
+							</Button>
+						)}
+					</div>
+				</div>
+
+				{/* Advanced Filters Panel */}
+				<AdvancedFiltersPanel
+					isOpen={showAdvancedFilters}
+					filters={{
+						nationality: nationalityFilter,
+						ageMin: ageMin,
+						ageMax: ageMax,
+					}}
+					onChange={handleAdvancedFilterChange}
+					onClear={clearAdvancedFilters}
+					disabled={loading}
+				/>
+
+				{/* Players Table */}
+				<Table
+					columns={columns}
+					data={players}
+					loading={loading}
+					onRowClick={handleRowClick}
+					emptyState={{
+						title: activeFilterCount > 0 ? 'No players found' : 'No players yet',
+						message: activeFilterCount > 0 
+							? 'Try adjusting your filters to find more players.' 
+							: 'Add your first player to get started!',
+						action: {
+							label: activeFilterCount > 0 ? 'Clear Filters' : 'Add Player',
+							onClick: activeFilterCount > 0 ? clearAllFilters : openCreateModal,
+						},
+					}}
+					pagination={
+						totalPages > 0
+							? {
+									currentPage: page,
+									totalPages: totalPages,
+									onPageChange: handlePageChange,
+								}
+							: undefined
+					}
+				/>
+
+				{/* Results count */}
+				{!loading && !error && players.length > 0 && (
+					<div className="mt-4 text-sm text-gray-500 text-center">
+						Showing {players.length} of {count} players
+					</div>
+				)}
+			</Card>
+
+			{/* Delete Confirmation Dialog */}
+			<ConfirmDialog
+				isOpen={deleteDialogOpen}
+				title="Delete Player"
+				message={`Are you sure you want to delete "${playerToDelete?.full_name}"? This action cannot be undone.`}
+				onConfirm={confirmDelete}
+				onCancel={handleCloseDeleteDialog}
+				danger
+				confirmLabel="Delete"
+				cancelLabel="Cancel"
+				loading={deleting}
+			/>
+
+			{/* Create Player Modal */}
+			<PlayerModal
+				isOpen={showCreateModal}
+				onClose={() => setShowCreateModal(false)}
+				player={null}
+				onSuccess={fetchPlayers}
+			/>
+
+			{/* Edit Player Modal */}
+			<PlayerModal
+				isOpen={showEditModal}
+				onClose={() => setShowEditModal(false)}
+				player={selectedPlayer}
+				onSuccess={fetchPlayers}
+			/>
+
+		</DashboardLayout>
+	);
+};
+
+export default PlayersPage;

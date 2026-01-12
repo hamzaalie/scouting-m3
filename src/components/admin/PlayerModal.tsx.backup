@@ -1,0 +1,782 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import Modal from '../common/Modal';
+import Input from '../common/Input';
+import Button from '../common/Button';
+import Select, { type SelectOption } from '../common/Select';
+import { 
+	createPlayer, 
+	updatePlayer, 
+	getAllUsers,
+} from '../../services/playerService';
+import { getAllTeams } from '../../services/teamService';
+import type { Player, PlayerCreateUpdate, UserOption, Position, PreferredFoot } from '../../types/player';
+import type { TeamListItem } from '../../types/team';
+import { showSuccess, showError } from '../../utils/toast';
+import { POSITION_OPTIONS, PREFERRED_FOOT_OPTIONS } from '../../types/player';
+
+/**
+ * PlayerModal Component Props
+ */
+export interface PlayerModalProps {
+	/**
+	 * Whether the modal is open
+	 */
+	isOpen: boolean;
+	/**
+	 * Callback when modal should close
+	 */
+	onClose: () => void;
+	/**
+	 * Player object for edit mode (null for create mode)
+	 */
+	player: Player | null;
+	/**
+	 * Callback after successful create/update
+	 */
+	onSuccess: () => void;
+}
+
+/**
+ * Tab IDs for the multi-step form
+ */
+const TABS = {
+	PERSONAL_INFO: 0,
+	TEAM_POSITION: 1,
+	PHYSICAL_STATS: 2,
+	BIO: 3,
+} as const;
+
+/**
+ * Tab labels
+ */
+const TAB_LABELS = [
+	'Personal Info',
+	'Team & Position',
+	'Physical Stats',
+	'Biography',
+];
+
+/**
+ * PlayerModal Component
+ *
+ * Multi-tab modal form for creating and editing players.
+ * Features:
+ * - 4-step form with tab navigation
+ * - Form validation per tab
+ * - User and team dropdown loading
+ * - Position selection with visual indicators
+ * - Physical stats with unit display
+ * - Bio with character counter
+ * - Error handling with toast notifications
+ * - Responsive design
+ */
+const PlayerModal: React.FC<PlayerModalProps> = ({
+	isOpen,
+	onClose,
+	player,
+	onSuccess,
+}) => {
+	// Tab state
+	const [currentTab, setCurrentTab] = useState<number>(TABS.PERSONAL_INFO);
+
+	// Form state
+	const [formData, setFormData] = useState<PlayerCreateUpdate>({
+		user: 0,
+		team: null,
+		position: 'FW' as Position,
+		jersey_number: 1,
+		date_of_birth: '',
+		nationality: '',
+		height: 170,
+		weight: 70,
+		preferred_foot: 'Right' as PreferredFoot,
+		bio: '',
+	});
+
+	const [errors, setErrors] = useState<Record<string, string>>({});
+	const [loading, setLoading] = useState<boolean>(false);
+
+	// Dropdown data
+	const [users, setUsers] = useState<UserOption[]>([]);
+	const [teams, setTeams] = useState<TeamListItem[]>([]);
+	const [loadingUsers, setLoadingUsers] = useState<boolean>(false);
+	const [loadingTeams, setLoadingTeams] = useState<boolean>(false);
+
+	// Determine if we're in edit mode
+	const isEditMode = player !== null;
+
+	// Load users and teams on modal open
+	useEffect(() => {
+		if (!isOpen) return;
+
+		// Fetch users (only in create mode)
+		if (!isEditMode) {
+			setLoadingUsers(true);
+			getAllUsers('player')
+				.then((data) => {
+					setUsers(data);
+				})
+				.catch((err) => {
+					console.error('Failed to load users:', err);
+					showError('Failed to load users. Please try again.');
+				})
+				.finally(() => {
+					setLoadingUsers(false);
+				});
+		}
+
+		// Fetch teams
+		setLoadingTeams(true);
+		getAllTeams({ page: 1, ordering: 'name' })
+			.then((res) => {
+				setTeams(res.results);
+			})
+			.catch((err) => {
+				console.error('Failed to load teams:', err);
+				showError('Failed to load teams. Please try again.');
+			})
+			.finally(() => {
+				setLoadingTeams(false);
+			});
+	}, [isOpen, isEditMode]);
+
+	// Initialize form when player changes or modal opens
+	useEffect(() => {
+		if (!isOpen) {
+			// Reset form when modal closes
+			setFormData({
+				user: 0,
+				team: null,
+				position: 'FW' as Position,
+				jersey_number: 1,
+				date_of_birth: '',
+				nationality: '',
+				height: 170,
+				weight: 70,
+				preferred_foot: 'Right' as PreferredFoot,
+				bio: '',
+			});
+			setErrors({});
+			setCurrentTab(TABS.PERSONAL_INFO);
+			return;
+		}
+
+		// Populate form when editing
+		if (player) {
+			setFormData({
+				user: player.user.id,
+				team: player.team?.id || null,
+				position: player.position,
+				jersey_number: player.jersey_number,
+				date_of_birth: player.date_of_birth,
+				nationality: player.nationality,
+				height: player.height,
+				weight: player.weight,
+				preferred_foot: player.preferred_foot,
+				bio: player.bio || '',
+			});
+		} else {
+			// Reset for create mode
+			setFormData({
+				user: 0,
+				team: null,
+				position: 'FW' as Position,
+				jersey_number: 1,
+				date_of_birth: '',
+				nationality: '',
+				height: 170,
+				weight: 70,
+				preferred_foot: 'Right' as PreferredFoot,
+				bio: '',
+			});
+		}
+		setErrors({});
+		setCurrentTab(TABS.PERSONAL_INFO);
+	}, [isOpen, player]);
+
+	/**
+	 * Handle input change
+	 */
+	const handleChange = (field: keyof PlayerCreateUpdate, value: any) => {
+		setFormData((prev) => ({ ...prev, [field]: value }));
+		// Clear error for this field
+		setErrors((prev) => {
+			const newErrors = { ...prev };
+			delete newErrors[field];
+			return newErrors;
+		});
+	};
+
+	/**
+	 * Validate current tab
+	 */
+	const validateTab = (tabIndex: number): boolean => {
+		const newErrors: Record<string, string> = {};
+
+		if (tabIndex === TABS.PERSONAL_INFO) {
+			// User (create mode only)
+			if (!isEditMode && (!formData.user || formData.user === 0)) {
+				newErrors.user = 'Please select a user.';
+			}
+
+			// Date of birth
+			if (!formData.date_of_birth) {
+				newErrors.date_of_birth = 'Date of birth is required.';
+			} else {
+				const dob = new Date(formData.date_of_birth);
+				const today = new Date();
+				const age = today.getFullYear() - dob.getFullYear();
+				if (age < 10 || age > 60) {
+					newErrors.date_of_birth = 'Player must be between 10 and 60 years old.';
+				}
+			}
+
+			// Nationality
+			if (!formData.nationality || formData.nationality.trim() === '') {
+				newErrors.nationality = 'Nationality is required.';
+			}
+		}
+
+		if (tabIndex === TABS.TEAM_POSITION) {
+			// Position
+			if (!formData.position) {
+				newErrors.position = 'Position is required.';
+			}
+
+			// Jersey number (if provided)
+			if (formData.jersey_number !== null && formData.jersey_number !== undefined) {
+				const num = Number(formData.jersey_number);
+				if (num < 1 || num > 99) {
+					newErrors.jersey_number = 'Jersey number must be between 1 and 99.';
+				}
+			}
+
+			// Preferred foot
+			if (!formData.preferred_foot) {
+				newErrors.preferred_foot = 'Preferred foot is required.';
+			}
+		}
+
+		if (tabIndex === TABS.PHYSICAL_STATS) {
+			// Height (if provided)
+			if (formData.height !== null && formData.height !== undefined) {
+				const h = Number(formData.height);
+				if (h < 140 || h > 230) {
+					newErrors.height = 'Height must be between 140 and 230 cm.';
+				}
+			}
+
+			// Weight (if provided)
+			if (formData.weight !== null && formData.weight !== undefined) {
+				const w = Number(formData.weight);
+				if (w < 40 || w > 150) {
+					newErrors.weight = 'Weight must be between 40 and 150 kg.';
+				}
+			}
+		}
+
+		// Tab 3 (Bio) has no validation (optional field)
+
+		setErrors(newErrors);
+		return Object.keys(newErrors).length === 0;
+	};
+
+	/**
+	 * Navigate to next tab
+	 */
+	const handleNext = () => {
+		if (validateTab(currentTab)) {
+			setCurrentTab((prev) => Math.min(prev + 1, TABS.BIO));
+		}
+	};
+
+	/**
+	 * Navigate to previous tab
+	 */
+	const handlePrevious = () => {
+		setCurrentTab((prev) => Math.max(prev - 1, TABS.PERSONAL_INFO));
+	};
+
+	/**
+	 * Submit form
+	 */
+	const handleSubmit = async (e: React.FormEvent) => {
+		e.preventDefault();
+
+		// Validate all tabs
+		let allValid = true;
+		for (let i = TABS.PERSONAL_INFO; i <= TABS.BIO; i++) {
+			if (!validateTab(i)) {
+				allValid = false;
+				// Navigate to first tab with errors
+				setCurrentTab(i);
+				break;
+			}
+		}
+
+		if (!allValid) {
+			showError('Please fix validation errors before submitting.');
+			return;
+		}
+
+		setLoading(true);
+
+		try {
+			// Prepare data for submission
+			const submitData: PlayerCreateUpdate = {
+				...formData,
+				// Convert to numbers where needed
+				jersey_number: formData.jersey_number ? Number(formData.jersey_number) : 1,
+				height: formData.height ? Number(formData.height) : 170,
+				weight: formData.weight ? Number(formData.weight) : 70,
+			};
+
+			if (isEditMode && player) {
+				// Update existing player
+				await updatePlayer(player.id, submitData);
+				showSuccess('Player updated successfully!');
+			} else {
+				// Create new player
+				await createPlayer(submitData);
+				showSuccess('Player created successfully!');
+			}
+
+			// Call success callback and close modal
+			onSuccess();
+			onClose();
+		} catch (err: any) {
+			console.error('Failed to save player:', err);
+			const errorMessage = err?.message || 'Failed to save player. Please try again.';
+			showError(errorMessage);
+
+			// Try to parse field-specific errors from API
+			if (err?.response?.data && typeof err.response.data === 'object') {
+				const apiErrors: Record<string, string> = {};
+				for (const [key, value] of Object.entries(err.response.data)) {
+					if (Array.isArray(value)) {
+						apiErrors[key] = value[0];
+					} else if (typeof value === 'string') {
+						apiErrors[key] = value;
+					}
+				}
+				setErrors(apiErrors);
+
+				// Navigate to tab with first error
+				if (apiErrors.user || apiErrors.date_of_birth || apiErrors.nationality) {
+					setCurrentTab(TABS.PERSONAL_INFO);
+				} else if (apiErrors.position || apiErrors.jersey_number || apiErrors.preferred_foot || apiErrors.team) {
+					setCurrentTab(TABS.TEAM_POSITION);
+				} else if (apiErrors.height || apiErrors.weight) {
+					setCurrentTab(TABS.PHYSICAL_STATS);
+				}
+			}
+		} finally {
+			setLoading(false);
+		}
+	};
+
+	// User dropdown options
+	const userOptions: SelectOption[] = useMemo(() => {
+		return users.map((user) => ({
+			value: String(user.id),
+			label: `${user.full_name} (${user.email})`,
+		}));
+	}, [users]);
+
+	// Team dropdown options
+	const teamOptions: SelectOption[] = useMemo(() => {
+		return [
+			{ value: '', label: 'Free Agent (No Team)' },
+			...teams.map((team) => ({
+				value: String(team.id),
+				label: team.name,
+			})),
+		];
+	}, [teams]);
+
+	// Position button helper
+	const getPositionColor = (pos: Position): string => {
+		if (formData.position === pos) {
+			switch (pos) {
+				case 'GK': return 'bg-yellow-100 border-yellow-500 text-yellow-700';
+				case 'DF': return 'bg-blue-100 border-blue-500 text-blue-700';
+				case 'MF': return 'bg-green-100 border-green-500 text-green-700';
+				case 'FW': return 'bg-red-100 border-red-500 text-red-700';
+			}
+		}
+		return 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50';
+	};
+
+	// Character count for bio
+	const bioCharCount = formData.bio?.length || 0;
+	const bioMaxLength = 1000;
+
+	return (
+		<Modal 
+			isOpen={isOpen} 
+			onClose={onClose} 
+			title={isEditMode ? 'Edit Player' : 'Create Player'}
+			size="lg"
+		>
+			<form onSubmit={handleSubmit}>
+				{/* Tab Navigation */}
+				<div className="mb-6">
+					<div className="flex items-center justify-between border-b border-gray-200">
+						{TAB_LABELS.map((label, index) => (
+							<button
+								key={index}
+								type="button"
+								onClick={() => setCurrentTab(index)}
+								className={`
+									flex-1 py-3 px-4 text-sm font-medium border-b-2 transition-colors
+									${currentTab === index
+										? 'border-blue-500 text-blue-600'
+										: 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+									}
+								`}
+							>
+								{label}
+							</button>
+						))}
+					</div>
+
+					{/* Progress Indicator */}
+					<div className="mt-2 text-center text-sm text-gray-500">
+						Step {currentTab + 1} of {TAB_LABELS.length}
+					</div>
+				</div>
+
+				{/* Tab Content */}
+				<div className="space-y-4 min-h-[400px]">
+					{/* TAB 1: PERSONAL INFO */}
+					{currentTab === TABS.PERSONAL_INFO && (
+						<div className="space-y-4 animate-fade-in">
+							{/* User Selection (Create mode only) */}
+							{!isEditMode && (
+								<div>
+									<label className="block text-sm font-medium text-gray-700 mb-1">
+										Select User <span className="text-red-500">*</span>
+									</label>
+									<Select
+										options={userOptions}
+										value={String(formData.user)}
+										onChange={(value) => handleChange('user', Number(value))}
+										placeholder="Select a user..."
+										disabled={loadingUsers || loading}
+									/>
+									{errors.user && (
+										<p className="mt-1 text-sm text-red-600">{errors.user}</p>
+									)}
+									{loadingUsers && (
+										<p className="mt-1 text-sm text-gray-500">Loading users...</p>
+									)}
+								</div>
+							)}
+
+							{/* User Display (Edit mode) */}
+							{isEditMode && player && (
+								<div>
+									<label className="block text-sm font-medium text-gray-700 mb-1">
+										User
+									</label>
+									<div className="p-3 bg-gray-50 rounded-md border border-gray-200">
+										<p className="text-sm font-medium text-gray-900">
+											{player.user.first_name} {player.user.last_name}
+										</p>
+										<p className="text-sm text-gray-500">{player.user.email}</p>
+									</div>
+								</div>
+							)}
+
+							{/* Date of Birth */}
+							<Input
+								label="Date of Birth"
+								type="date"
+								value={formData.date_of_birth}
+								onChange={(e) => handleChange('date_of_birth', e.target.value)}
+								max={new Date().toISOString().split('T')[0]}
+								required
+								error={errors.date_of_birth}
+								helperText="Player must be at least 10 years old"
+								disabled={loading}
+							/>
+
+							{/* Nationality */}
+							<Input
+								label="Nationality"
+								type="text"
+								value={formData.nationality}
+								onChange={(e) => handleChange('nationality', e.target.value)}
+								placeholder="e.g., Argentina, Brazil, Spain..."
+								required
+								error={errors.nationality}
+								disabled={loading}
+							/>
+						</div>
+					)}
+
+					{/* TAB 2: TEAM & POSITION */}
+					{currentTab === TABS.TEAM_POSITION && (
+						<div className="space-y-6 animate-fade-in">
+							{/* Team Selection */}
+							<div>
+								<label className="block text-sm font-medium text-gray-700 mb-1">
+									Team
+								</label>
+								<Select
+									options={teamOptions}
+									value={formData.team ? String(formData.team) : ''}
+									onChange={(value) => handleChange('team', value ? Number(value) : null)}
+									placeholder="Select a team..."
+									disabled={loadingTeams || loading}
+								/>
+								{errors.team && (
+									<p className="mt-1 text-sm text-red-600">{errors.team}</p>
+								)}
+								{loadingTeams && (
+									<p className="mt-1 text-sm text-gray-500">Loading teams...</p>
+								)}
+							</div>
+
+							{/* Position Selection */}
+							<div>
+								<label className="block text-sm font-medium text-gray-700 mb-2">
+									Position <span className="text-red-500">*</span>
+								</label>
+								<div className="grid grid-cols-2 gap-3">
+									{POSITION_OPTIONS.map((option) => (
+										<button
+											key={option.value}
+											type="button"
+											onClick={() => handleChange('position', option.value)}
+											disabled={loading}
+											className={`
+												p-4 rounded-lg border-2 transition-all
+												${getPositionColor(option.value)}
+												disabled:opacity-50 disabled:cursor-not-allowed
+											`}
+										>
+											<div className="text-lg font-bold">{option.value}</div>
+											<div className="text-sm">{option.label}</div>
+										</button>
+									))}
+								</div>
+								{errors.position && (
+									<p className="mt-1 text-sm text-red-600">{errors.position}</p>
+								)}
+							</div>
+
+							{/* Jersey Number */}
+							<Input
+								label="Jersey Number"
+								type="number"
+								min="1"
+								max="99"
+								value={formData.jersey_number !== null ? String(formData.jersey_number) : ''}
+								onChange={(e) => handleChange('jersey_number', e.target.value ? Number(e.target.value) : null)}
+								placeholder="e.g., 10"
+								error={errors.jersey_number}
+								helperText="Between 1 and 99"
+								disabled={loading}
+							/>
+
+							{/* Preferred Foot */}
+							<div>
+								<label className="block text-sm font-medium text-gray-700 mb-2">
+									Preferred Foot <span className="text-red-500">*</span>
+								</label>
+								<div className="flex gap-3">
+									{PREFERRED_FOOT_OPTIONS.map((option) => (
+										<button
+											key={option.value}
+											type="button"
+											onClick={() => handleChange('preferred_foot', option.value)}
+											disabled={loading}
+											className={`
+												flex-1 p-3 rounded-lg border-2 transition-all
+												${formData.preferred_foot === option.value
+													? 'bg-blue-100 border-blue-500 text-blue-700'
+													: 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+												}
+												disabled:opacity-50 disabled:cursor-not-allowed
+											`}
+										>
+											{option.label}
+										</button>
+									))}
+								</div>
+								{errors.preferred_foot && (
+									<p className="mt-1 text-sm text-red-600">{errors.preferred_foot}</p>
+								)}
+							</div>
+						</div>
+					)}
+
+					{/* TAB 3: PHYSICAL STATS */}
+					{currentTab === TABS.PHYSICAL_STATS && (
+						<div className="space-y-4 animate-fade-in">
+							{/* Height */}
+							<div>
+								<label className="block text-sm font-medium text-gray-700 mb-1">
+									Height (cm)
+								</label>
+								<div className="relative">
+									<Input
+										type="number"
+										min="140"
+										max="230"
+										value={formData.height !== null ? String(formData.height) : ''}
+										onChange={(e) => handleChange('height', e.target.value ? Number(e.target.value) : null)}
+										placeholder="e.g., 180"
+										error={errors.height}
+										disabled={loading}
+									/>
+									<div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm pointer-events-none">
+										cm
+									</div>
+								</div>
+								<p className="mt-1 text-sm text-gray-500">
+									Between 140 and 230 cm
+								</p>
+							</div>
+
+							{/* Weight */}
+							<div>
+								<label className="block text-sm font-medium text-gray-700 mb-1">
+									Weight (kg)
+								</label>
+								<div className="relative">
+									<Input
+										type="number"
+										min="40"
+										max="150"
+										value={formData.weight !== null ? String(formData.weight) : ''}
+										onChange={(e) => handleChange('weight', e.target.value ? Number(e.target.value) : null)}
+										placeholder="e.g., 75"
+										error={errors.weight}
+										disabled={loading}
+									/>
+									<div className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm pointer-events-none">
+										kg
+									</div>
+								</div>
+								<p className="mt-1 text-sm text-gray-500">
+									Between 40 and 150 kg
+								</p>
+							</div>
+
+							{/* Visual Stats Display */}
+							{formData.height && formData.weight && (
+								<div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+									<h4 className="text-sm font-semibold text-blue-900 mb-2">
+										Physical Profile
+									</h4>
+									<div className="grid grid-cols-2 gap-4 text-sm">
+										<div>
+											<span className="text-blue-700">Height:</span>{' '}
+											<span className="font-medium text-blue-900">{formData.height} cm</span>
+										</div>
+										<div>
+											<span className="text-blue-700">Weight:</span>{' '}
+											<span className="font-medium text-blue-900">{formData.weight} kg</span>
+										</div>
+									</div>
+								</div>
+							)}
+						</div>
+					)}
+
+					{/* TAB 4: BIO */}
+					{currentTab === TABS.BIO && (
+						<div className="space-y-4 animate-fade-in">
+							{/* Biography */}
+							<div>
+								<label className="block text-sm font-medium text-gray-700 mb-1">
+									Biography
+								</label>
+								<textarea
+									rows={8}
+									maxLength={bioMaxLength}
+									value={formData.bio || ''}
+									onChange={(e) => handleChange('bio', e.target.value)}
+									placeholder="Enter player biography, career highlights, achievements, playing style..."
+									disabled={loading}
+									className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+								/>
+								<div className="mt-1 flex justify-between text-sm">
+									<span className="text-gray-500">Optional field</span>
+									<span className={`${bioCharCount > bioMaxLength * 0.9 ? 'text-red-600' : 'text-gray-500'}`}>
+										{bioCharCount} / {bioMaxLength} characters
+									</span>
+								</div>
+							</div>
+
+							{/* Summary */}
+							<div className="mt-6 p-4 bg-green-50 rounded-lg border border-green-200">
+								<h4 className="text-sm font-semibold text-green-900 mb-3">
+									Ready to {isEditMode ? 'Update' : 'Create'} Player
+								</h4>
+								<div className="space-y-2 text-sm text-green-800">
+									<p><span className="font-medium">Name:</span> {player?.full_name || 'New Player'}</p>
+									<p><span className="font-medium">Position:</span> {formData.position}</p>
+									<p><span className="font-medium">Team:</span> {formData.team ? teams.find(t => t.id === formData.team)?.name : 'Free Agent'}</p>
+									<p><span className="font-medium">Nationality:</span> {formData.nationality}</p>
+								</div>
+							</div>
+						</div>
+					)}
+				</div>
+
+				{/* Footer - Navigation Buttons */}
+				<div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
+					<div className="flex gap-2">
+						{currentTab > TABS.PERSONAL_INFO && (
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={handlePrevious}
+								disabled={loading}
+							>
+								Previous
+							</Button>
+						)}
+					</div>
+
+					<div className="flex gap-2">
+						<Button
+							type="button"
+							variant="ghost"
+							onClick={onClose}
+							disabled={loading}
+						>
+							Cancel
+						</Button>
+
+						{currentTab < TABS.BIO ? (
+							<Button
+								type="button"
+								variant="primary"
+								onClick={handleNext}
+								disabled={loading}
+							>
+								Next
+							</Button>
+						) : (
+							<Button
+								type="submit"
+								variant="primary"
+								loading={loading}
+								disabled={loading}
+							>
+								{isEditMode ? 'Update Player' : 'Create Player'}
+							</Button>
+						)}
+					</div>
+				</div>
+			</form>
+		</Modal>
+	);
+};
+
+export default PlayerModal;
+
