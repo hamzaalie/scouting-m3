@@ -444,14 +444,6 @@ const PlayerModal: React.FC<PlayerModalProps> = ({
 		}
 	};
 
-	// User dropdown options
-	const userOptions: SelectOption[] = useMemo(() => {
-		return users.map((user) => ({
-			value: String(user.id),
-			label: `${user.full_name} (${user.email})`,
-		}));
-	}, [users]);
-
 	// Team dropdown options
 	const teamOptions: SelectOption[] = useMemo(() => {
 		return [
