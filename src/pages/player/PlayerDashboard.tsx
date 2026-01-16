@@ -8,6 +8,7 @@ import EmptyState from '../../components/common/EmptyState';
 import Skeleton from '../../components/common/Skeleton';
 import { getMyProfile, getMyStats, getMyMatches } from '../../services/playerService';
 import type { AggregatedStats, PlayerStats } from '../../services/statsService';
+import { handleApiError } from '../../utils/errorHandler';
 
 /**
  * Player Dashboard Page

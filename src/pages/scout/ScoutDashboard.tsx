@@ -5,6 +5,7 @@ import DashboardLayout from '../../components/layout/DashboardLayout';
 import Avatar from '../../components/common/Avatar';
 import { getAllPlayers } from '../../services/playerService';
 import type { PlayerListItem, Position } from '../../types/player';
+import { handleApiError } from '../../utils/errorHandler';
 
 /**
  * Scout Dashboard Page

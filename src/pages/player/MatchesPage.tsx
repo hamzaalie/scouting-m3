@@ -8,6 +8,7 @@ import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import { getMyMatches, getMyProfile } from '../../services/playerService';
 import type { PlayerStats } from '../../services/statsService';
+import { showError } from '../../utils/toast';
 
 /**
  * Matches Page (Player)
